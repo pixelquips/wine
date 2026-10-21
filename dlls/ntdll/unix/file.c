@@ -4687,7 +4687,7 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
     int unix_fd;
 
     if ((unix_fd = get_mapped_exe_file( unix_name, strlen( unix_name ) )) != -1)
-        return wine_server_fd_to_handle( unix_fd, access, attr->Attributes, handle );
+        return wine_server_fd_to_handle_named( unix_fd, access, attr->Attributes, handle, attr->ObjectName );
 
     if ((status = wine_server_alloc_object_attributes( attr, &objattr, &len ))) return status;
 

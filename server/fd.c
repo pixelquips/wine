@@ -1868,6 +1868,19 @@ struct unicode_str get_nt_name( struct fd *fd )
     return name;
 }
 
+/* set the NT name of an fd that has none of its own (memfd, unlinked RAM disk file) */
+int set_fd_nt_name( struct fd *fd, const struct unicode_str *name )
+{
+    WCHAR *copy;
+
+    if (!name->len) return 1;
+    if (!(copy = memdup( name->str, name->len ))) return 0;
+    free( fd->nt_name );
+    fd->nt_name = copy;
+    fd->nt_namelen = name->len;
+    return 1;
+}
+
 /* open() wrapper that returns a struct fd with no fd user set */
 struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_name,
                     int flags, mode_t *mode, unsigned int access,

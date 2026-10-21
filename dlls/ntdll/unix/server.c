@@ -1214,6 +1214,20 @@ done:
  */
 NTSTATUS CDECL wine_server_fd_to_handle( int fd, unsigned int access, unsigned int attributes, HANDLE *handle )
 {
+    return wine_server_fd_to_handle_named( fd, access, attributes, handle, NULL );
+}
+
+
+/***********************************************************************
+ *           wine_server_fd_to_handle_named
+ *
+ * Same as wine_server_fd_to_handle(), but also records name as the NT name of
+ * the server-side fd, for fds that have no name of their own (memfd, unlinked
+ * RAM disk files).
+ */
+NTSTATUS wine_server_fd_to_handle_named( int fd, unsigned int access, unsigned int attributes,
+                                         HANDLE *handle, const UNICODE_STRING *name )
+{
     unsigned int ret;
 
     *handle = 0;
@@ -1224,6 +1238,7 @@ NTSTATUS CDECL wine_server_fd_to_handle( int fd, unsigned int access, unsigned i
         req->access     = access;
         req->attributes = attributes;
         req->fd         = fd;
+        if (name && name->Length) wine_server_add_data( req, name->Buffer, name->Length );
         if (!(ret = wine_server_call( req ))) *handle = wine_server_ptr_handle( reply->handle );
     }
     SERVER_END_REQ;

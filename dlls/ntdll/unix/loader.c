@@ -1242,7 +1242,7 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
         len = end - sep - 1;
         if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
 
-        if ((status = wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, &handle ))) return status;
+        if ((status = wine_server_fd_to_handle_named( fd, GENERIC_READ | SYNCHRONIZE, 0, &handle, nt_name ))) return status;
 
         size.QuadPart = 0;
         status = NtCreateSection( mapping, STANDARD_RIGHTS_REQUIRED | SECTION_QUERY |

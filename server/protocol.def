@@ -1661,6 +1661,7 @@ enum event_op { PULSE_EVENT, SET_EVENT, RESET_EVENT };
     unsigned int access;        /* wanted access rights */
     unsigned int attributes;    /* object attributes */
     int          fd;            /* file descriptor on the client side */
+    VARARG(filename,unicode_str); /* optional NT name for fds without one (memfd, RAM disk file) */
 @REPLY
     obj_handle_t handle;        /* handle to the file */
 @END

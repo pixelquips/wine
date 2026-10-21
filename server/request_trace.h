@@ -662,6 +662,7 @@ static void dump_alloc_file_handle_request( const struct alloc_file_handle_reque
     fprintf( stderr, " access=%08x", req->access );
     fprintf( stderr, ", attributes=%08x", req->attributes );
     fprintf( stderr, ", fd=%d", req->fd );
+    dump_varargs_unicode_str( ", filename=", cur_size );
 }
 
 static void dump_alloc_file_handle_reply( const struct alloc_file_handle_reply *req )

@@ -415,6 +415,8 @@ extern void set_async_direct_result( HANDLE *async_handle, unsigned int options,
 extern NTSTATUS unixcall_wine_dbg_write( void *args );
 extern NTSTATUS unixcall_wine_server_call( void *args );
 extern NTSTATUS unixcall_wine_server_fd_to_handle( void *args );
+extern NTSTATUS wine_server_fd_to_handle_named( int fd, unsigned int access, unsigned int attributes,
+                                                HANDLE *handle, const UNICODE_STRING *name );
 extern NTSTATUS unixcall_wine_server_handle_to_fd( void *args );
 extern NTSTATUS unixcall_wine_spawnvp( void *args );
 #ifdef _WIN64

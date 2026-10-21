@@ -656,6 +656,7 @@ DECL_HANDLER(create_file)
 DECL_HANDLER(alloc_file_handle)
 {
     struct file *file;
+    struct unicode_str name = get_req_unicode_str();
     int fd;
 
     reply->handle = 0;
@@ -666,7 +667,9 @@ DECL_HANDLER(alloc_file_handle)
     }
     if ((file = create_file_for_fd( fd, req->access, FILE_SHARE_READ | FILE_SHARE_WRITE )))
     {
-        reply->handle = alloc_handle( current->process, file, req->access, req->attributes );
+        if (name.len > 65534 || name.len % sizeof(WCHAR)) set_error( STATUS_INVALID_PARAMETER );
+        else if (set_fd_nt_name( file->fd, &name ))
+            reply->handle = alloc_handle( current->process, file, req->access, req->attributes );
         release_object( file );
     }
 }

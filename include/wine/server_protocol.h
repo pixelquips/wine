@@ -1927,6 +1927,7 @@ struct alloc_file_handle_request
     unsigned int access;
     unsigned int attributes;
     int          fd;
+    /* VARARG(filename,unicode_str); */
 };
 struct alloc_file_handle_reply
 {
@@ -7186,6 +7187,6 @@ union generic_reply
     struct alpc_create_port_reply alpc_create_port_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 963
+#define SERVER_PROTOCOL_VERSION 964
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
