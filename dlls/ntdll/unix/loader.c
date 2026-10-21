@@ -86,6 +86,7 @@
 #include "winioctl.h"
 #include "winternl.h"
 #include "unix_private.h"
+#include "locale_private.h"
 #include "msync.h"
 #include "wine/list.h"
 #include "wine/debug.h"
@@ -1190,6 +1191,71 @@ static inline char *prepend_build_dir_path( char *ptr, const char *ext, const ch
 
 
 /***********************************************************************
+ *           open_mapped_dll_file
+ *
+ * Look up nt_name in WINE_DLL_FILE_MAP ("<fd>:<nt-name>|...") and, if it is
+ * listed, create an image section from the inherited fd instead of opening
+ * the file by name. Any seekable regular file fd works (memfd on Linux, a file
+ * on a RAM disk on macOS); the fd stays open and owned by the process.
+ */
+static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *mapping )
+{
+    const char *value = getenv( "WINE_DLL_FILE_MAP" );
+    const char *entry, *sep, *end;
+    char *utf8_name;
+    unsigned int allocLen;
+    NTSTATUS status;
+
+    if (!value || !*value) return STATUS_DLL_NOT_FOUND;
+
+    if ((status = utf8_wcstombs_size( nt_name->Buffer, nt_name->Length / sizeof(WCHAR), &allocLen )))
+        return status;
+    utf8_name = alloca( allocLen + 1 );
+    if ((status = utf8_wcstombs( utf8_name, allocLen, &allocLen, nt_name->Buffer, nt_name->Length / sizeof(WCHAR) )))
+        return status;
+
+    for (entry = value; *entry; entry = *end ? end + 1 : end)
+    {
+        HANDLE handle;
+        LARGE_INTEGER size;
+        size_t len;
+        int fd = 0;
+        const char *p;
+
+        end = strchr( entry, '|' );
+        if (!end) end = entry + strlen( entry );
+        if (end == entry) continue;
+
+        sep = strchr( entry, ':' );
+        if (!sep || sep >= end) continue;
+
+        for (p = entry; p < sep; p++)
+        {
+            if (*p < '0' || *p > '9')
+            {
+                fd = -1;
+                break;
+            }
+            fd = fd * 10 + (*p - '0');
+        }
+        if (fd < 0 || sep == entry || sep + 1 == end) continue;
+        len = end - sep - 1;
+        if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
+
+        if ((status = wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, &handle ))) return status;
+
+        size.QuadPart = 0;
+        status = NtCreateSection( mapping, STANDARD_RIGHTS_REQUIRED | SECTION_QUERY |
+                                  SECTION_MAP_READ | SECTION_MAP_EXECUTE,
+                                  NULL, &size, PAGE_EXECUTE_READ, SEC_IMAGE, handle );
+        NtClose( handle );
+        return status;
+    }
+    return STATUS_DLL_NOT_FOUND;
+}
+
+
+/***********************************************************************
  *	open_dll_file
  *
  * Open a file for a new dll. Helper for open_builtin_pe_file.
@@ -1557,9 +1623,9 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
 {
     NTSTATUS status = STATUS_DLL_NOT_FOUND;
     OBJECT_ATTRIBUTES attr;
-    char *unix_name;
+    char *unix_name = NULL;
     HANDLE mapping;
-    UNICODE_STRING true_nt_name;
+    UNICODE_STRING true_nt_name = { 0 };
     SIZE_T size = 0;
     USHORT search_machine;
     BOOL is_system_dir = is_system_dir_path( nt_name, &search_machine );
@@ -1568,7 +1634,8 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
     if (loadorder == LO_DISABLED) NtTerminateProcess( GetCurrentProcess(), status );
 
     InitializeObjectAttributes( &attr, nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
-    if (!get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE ))
+    status = open_mapped_dll_file( nt_name, &mapping );
+    if (status == STATUS_DLL_NOT_FOUND && !get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE ))
         status = open_dll_file( unix_name, &attr, &mapping );
 
     if (!status)
@@ -1581,7 +1648,7 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
         }
         NtClose( mapping );
     }
-    else if (status == STATUS_INVALID_IMAGE_NOT_MZ && loadorder != LO_NATIVE)
+    else if (status == STATUS_INVALID_IMAGE_NOT_MZ && loadorder != LO_NATIVE && unix_name)
     {
         status = open_main_image_so_file( unix_name, attr.ObjectName );
     }
