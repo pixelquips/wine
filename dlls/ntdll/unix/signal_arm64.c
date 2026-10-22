@@ -1919,6 +1919,10 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
                    "ldp x24, x25, [sp, #0xc0]\n\t"
                    "ldp x26, x27, [sp, #0xd0]\n\t"
                    "ldp x28, x29, [sp, #0xe0]\n\t"
+                   /* Fexbox: always restore FPCR. Host libraries (macOS frameworks) may
+                    * change it (e.g. set FZ), which must not leak into PE code. */
+                   "ldr w17, [sp, #0x128]\n\t"
+                   "msr FPCR, x17\n\t"
                    "tbz x16, #2, 1f\n\t"        /* CONTEXT_FLOATING_POINT */
                    "ldp q0,  q1,  [sp, #0x130]\n\t"
                    "ldp q2,  q3,  [sp, #0x150]\n\t"
@@ -2004,6 +2008,8 @@ __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
                    "stp x30, x9, [x10, #0xf0]\n\t"
                    "mrs x9, NZCV\n\t"
                    "stp x30, x9, [x10, #0x100]\n\t"
+                   "mrs x9, FPCR\n\t"          /* Fexbox: preserve FPCR across unix calls */
+                   "str w9, [x10, #0x128]\n\t"
                    /* switch to kernel stack */
                    "mov sp, x10\n\t"
                    /* we're now on the kernel stack, stitch unwind info with previous frame */
@@ -2029,6 +2035,8 @@ __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
                    "ldr w16, [sp, #0x10c]\n\t"  /* frame->restore_flags */
                    "cbnz w16, " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_return") "\n\t"
                    __ASM_CFI_CFA_IS_AT2(sp, 0x98, 0x02) /* frame->syscall_cfa */
+                   "ldr w17, [sp, #0x128]\n\t"  /* Fexbox: restore FPCR */
+                   "msr FPCR, x17\n\t"
                    "ldp x18, x19, [sp, #0x90]\n\t"
                    "ldp x16, x17, [sp, #0xf8]\n\t"
                    /* switch to user stack */
