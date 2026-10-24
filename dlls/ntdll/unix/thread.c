@@ -1306,17 +1306,17 @@ static NTSTATUS create_server_thread( HANDLE *handle, struct thread_data **data_
 
 #ifdef __APPLE__
 #include <pthread/qos.h>
-/* WINE_MAC_THREAD_QOS=interactive|initiated|default|utility sets the QoS class Windows
- * threads start with. macOS places Default-QoS work on efficiency cores, which starves
- * game job threads. */
+/* Windows threads start at user-interactive QoS. At macOS's Default QoS the scheduler
+ * mostly places them on efficiency cores, which starves game job threads.
+ * WINE_MAC_THREAD_QOS=interactive|initiated|default|utility|off overrides it. */
 void set_mac_thread_qos( pthread_attr_t *attr )
 {
     static int qos = -1;
     if (qos == -1)
     {
         const char *env = getenv( "WINE_MAC_THREAD_QOS" );
-        qos = 0;
-        if (env && !strcmp( env, "interactive" )) qos = QOS_CLASS_USER_INTERACTIVE;
+        qos = QOS_CLASS_USER_INTERACTIVE;
+        if (env && !strcmp( env, "off" )) qos = 0;
         else if (env && !strcmp( env, "initiated" )) qos = QOS_CLASS_USER_INITIATED;
         else if (env && !strcmp( env, "default" )) qos = QOS_CLASS_DEFAULT;
         else if (env && !strcmp( env, "utility" )) qos = QOS_CLASS_UTILITY;
