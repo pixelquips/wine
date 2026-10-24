@@ -66,6 +66,13 @@ struct unwind_builtin_dll_params
     CONTEXT                    *context;
 };
 
+/* CW HACK 22434: tell D3DMetal's libd3dshared.dylib where a native PE module was mapped */
+struct pe_module_loaded_params
+{
+    void                       *start;
+    void                       *end;
+};
+
 enum ntdll_unix_funcs
 {
     unix_load_so_dll,
@@ -76,6 +83,7 @@ enum ntdll_unix_funcs
     unix_wine_server_handle_to_fd,
     unix_wine_spawnvp,
     unix_system_time_precise,
+    unix_pe_module_loaded,
 };
 
 extern unixlib_handle_t __wine_unixlib_handle;

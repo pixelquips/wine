@@ -1954,7 +1954,7 @@ NTSTATUS WINAPI NtCompareTokens( HANDLE first, HANDLE second, BOOLEAN *equal )
 /**************************************************************************
  *           NtClose
  */
-NTSTATUS WINAPI NtClose( HANDLE handle )
+NTSTATUS WINAPI GPT_IMPORT(NtClose)( HANDLE handle )
 {
     sigset_t sigset;
     HANDLE port;
@@ -1995,6 +1995,19 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
     }
     return ret;
 }
+
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtClose( HANDLE handle )
+{
+    return sysv_NtClose( handle );
+}
+
+GPT_ABI_WRAPPER( NtClose );
+
+#endif
 
 #ifdef _WIN64
 

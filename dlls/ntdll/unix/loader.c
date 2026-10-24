@@ -1136,6 +1136,99 @@ static NTSTATUS unwind_builtin_dll( void *args )
 
 #endif /* SO_DLLS_SUPPORTED */
 
+/* CW HACK 22434: D3DMetal (Apple Game Porting Toolkit) support.
+ *
+ * Under Rosetta 2, libd3dshared.dylib can mark the code of native (non-builtin)
+ * PE modules as "non-native code regions", which Rosetta then translates with
+ * Windows-compatible semantics. ntdll reports each native PE module it maps.
+ * The library is only loaded when CX_APPLEGPTK_LIBD3DSHARED_PATH names it.
+ *
+ * Based on CodeWeavers' CrossOver Wine (LGPL 2.1+).
+ */
+#if defined(__APPLE__) && defined(__x86_64__)
+#include <sys/utsname.h>
+static pthread_once_t non_native_init_once = PTHREAD_ONCE_INIT;
+static void *non_native_support_lib;
+void *libd3dshared_load_addr = NULL, *libd3dshared_code_end = NULL;
+static void (*register_non_native_code_region)( void *, void * );
+static bool (*supports_non_native_code_regions)(void);
+
+/* Non-native code region support requires Sonoma or later, don't bother loading on earlier OSes */
+static BOOL sonoma_or_later(void)
+{
+    struct utsname name;
+    unsigned major, minor;
+
+    return (uname( &name ) == 0 &&
+            sscanf( name.release, "%u.%u", &major, &minor ) == 2 &&
+            major >= 23 /* macOS 14 Sonoma */);
+}
+
+static void init_non_native_support(void)
+{
+    const char *libd3dshared_path = getenv( "CX_APPLEGPTK_LIBD3DSHARED_PATH" );
+    char *default_path = NULL;
+
+    register_non_native_code_region = NULL;
+    supports_non_native_code_regions = NULL;
+
+    /* Unlike CrossOver, whose launcher sets the variable, default to the copy
+     * installed next to Wine's libraries (lib/external/libd3dshared.dylib) when
+     * there is one. Setting the variable to an empty string disables this. */
+    if (!libd3dshared_path && ntdll_dir)
+    {
+        default_path = build_path( ntdll_dir, "../../external/libd3dshared.dylib" );
+        if (!access( default_path, R_OK )) libd3dshared_path = default_path;
+    }
+
+    if (!libd3dshared_path || !libd3dshared_path[0] || !sonoma_or_later())
+    {
+        free( default_path );
+        return;
+    }
+
+    non_native_support_lib = dlopen( libd3dshared_path, RTLD_LOCAL );
+    if (non_native_support_lib)
+    {
+        Dl_info dli;
+
+        register_non_native_code_region = dlsym( non_native_support_lib, "register_non_native_code_region" );
+        supports_non_native_code_regions = dlsym( non_native_support_lib, "supports_non_native_code_regions" );
+
+        if (supports_non_native_code_regions && dladdr( supports_non_native_code_regions, &dli ))
+        {
+            unsigned long code_size;
+
+            libd3dshared_load_addr = dli.dli_fbase;
+            getsegmentdata( dli.dli_fbase, "__TEXT", &code_size );
+            libd3dshared_code_end = (char *)libd3dshared_load_addr + code_size;
+        }
+
+        TRACE( "Loaded libd3dshared.dylib, does%s support non-native code regions\n",
+               supports_non_native_code_regions ? (supports_non_native_code_regions() ? "" : " not") : " not" );
+    }
+    else
+        TRACE( "Loading libd3dshared.dylib failed: %s\n", dlerror() );
+    free( default_path );
+}
+
+static NTSTATUS pe_module_loaded( void *args )
+{
+    struct pe_module_loaded_params *params = args;
+
+    pthread_once( &non_native_init_once, &init_non_native_support );
+    if (register_non_native_code_region && supports_non_native_code_regions &&
+        supports_non_native_code_regions())
+    {
+        TRACE( "Marking non_native_code_region: %p-%p\n", params->start, params->end );
+        register_non_native_code_region( params->start, params->end );
+    }
+    return STATUS_SUCCESS;
+}
+#else
+static NTSTATUS pe_module_loaded( void *args ) { return STATUS_NOT_IMPLEMENTED; }
+#endif
+
 
 static const unixlib_entry_t unix_call_funcs[] =
 {
@@ -1147,6 +1240,7 @@ static const unixlib_entry_t unix_call_funcs[] =
     unixcall_wine_server_handle_to_fd,
     unixcall_wine_spawnvp,
     system_time_precise,
+    pe_module_loaded,
 };
 
 
@@ -1154,6 +1248,7 @@ static const unixlib_entry_t unix_call_funcs[] =
 
 static NTSTATUS wow64_load_so_dll( void *args ) { return STATUS_INVALID_IMAGE_FORMAT; }
 static NTSTATUS wow64_unwind_builtin_dll( void *args ) { return STATUS_UNSUCCESSFUL; }
+static NTSTATUS wow64_pe_module_loaded( void *args ) { return STATUS_NOT_IMPLEMENTED; }
 
 const unixlib_entry_t unix_call_wow64_funcs[] =
 {
@@ -1165,6 +1260,7 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
     wow64_wine_server_handle_to_fd,
     wow64_wine_spawnvp,
     system_time_precise,
+    wow64_pe_module_loaded,
 };
 
 #endif  /* _WIN64 */

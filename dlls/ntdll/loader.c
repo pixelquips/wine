@@ -2340,6 +2340,15 @@ static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name, 
     TRACE_(loaddll)( "Loaded %s at %p: %s\n", debugstr_w(wm->ldr.FullDllName.Buffer), *module,
                      is_builtin ? "builtin" : "native" );
 
+#if defined(__x86_64__) && !defined(__arm64ec__)
+    /* CW HACK 22434: let D3DMetal's libd3dshared mark native code as non-native code regions */
+    if (!is_builtin)
+    {
+        struct pe_module_loaded_params params = { *module, (char *)*module + map_size };
+        WINE_UNIX_CALL( unix_pe_module_loaded, &params );
+    }
+#endif
+
     wm->ldr.LoadCount = 1;
     *pwm = wm;
     *module = NULL;
@@ -3416,6 +3425,18 @@ NTSTATUS WINAPI __wine_ctrl_routine( void *arg )
 {
     DWORD ret = pCtrlRoutine ? pCtrlRoutine( arg ) : 0;
     RtlExitUserThread( ret );
+}
+
+
+/***********************************************************************
+ *              __wine_unix_call
+ *
+ * CW HACK 22435: D3DMetal (Apple Game Porting Toolkit) PE DLLs import
+ * __wine_unix_call from ntdll to reach their Unix side.
+ */
+NTSTATUS WINAPI __wine_unix_call_exported( unixlib_handle_t handle, unsigned int code, void *args )
+{
+    return __wine_unix_call( handle, code, args );
 }
 
 

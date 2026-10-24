@@ -1023,7 +1023,7 @@ done:
 /******************************************************************************
  *              NtCreateSemaphore (NTDLL.@)
  */
-NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+NTSTATUS WINAPI GPT_IMPORT(NtCreateSemaphore)( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
                                    LONG initial, LONG max )
 {
     unsigned int ret;
@@ -1051,6 +1051,20 @@ NTSTATUS WINAPI NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJ
     free( objattr );
     return ret;
 }
+
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtCreateSemaphore( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                                            LONG initial, LONG max )
+{
+    return sysv_NtCreateSemaphore( handle, access, attr, initial, max );
+}
+
+GPT_ABI_WRAPPER( NtCreateSemaphore );
+
+#endif
 
 
 /******************************************************************************
@@ -1123,7 +1137,7 @@ NTSTATUS WINAPI NtQuerySemaphore( HANDLE handle, SEMAPHORE_INFORMATION_CLASS cla
 /******************************************************************************
  *              NtReleaseSemaphore (NTDLL.@)
  */
-NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, LONG count, ULONG *previous )
+NTSTATUS WINAPI GPT_IMPORT(NtReleaseSemaphore)( HANDLE handle, LONG count, ULONG *previous )
 {
     unsigned int ret;
 
@@ -1148,11 +1162,24 @@ NTSTATUS WINAPI NtReleaseSemaphore( HANDLE handle, LONG count, ULONG *previous )
     return ret;
 }
 
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtReleaseSemaphore( HANDLE handle, LONG count, ULONG *previous )
+{
+    return sysv_NtReleaseSemaphore( handle, count, previous );
+}
+
+GPT_ABI_WRAPPER( NtReleaseSemaphore );
+
+#endif
+
 
 /**************************************************************************
  *              NtCreateEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+NTSTATUS WINAPI GPT_IMPORT(NtCreateEvent)( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
                                EVENT_TYPE type, BOOLEAN state )
 {
     unsigned int ret;
@@ -1180,6 +1207,20 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
     free( objattr );
     return ret;
 }
+
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr,
+                                                        EVENT_TYPE type, BOOLEAN state )
+{
+    return sysv_NtCreateEvent( handle, access, attr, type, state );
+}
+
+GPT_ABI_WRAPPER( NtCreateEvent );
+
+#endif
 
 
 /******************************************************************************
@@ -1212,7 +1253,7 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
 /******************************************************************************
  *              NtSetEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtSetEvent)( HANDLE handle, LONG *prev_state )
 {
     unsigned int ret;
 
@@ -1232,6 +1273,19 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
     return ret;
 }
 
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtSetEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtSetEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtSetEvent );
+
+#endif
+
 
 /******************************************************************************
  *              NtSetEventBoostPriority (NTDLL.@)
@@ -1245,7 +1299,7 @@ NTSTATUS WINAPI NtSetEventBoostPriority( HANDLE handle )
 /******************************************************************************
  *              NtResetEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtResetEvent)( HANDLE handle, LONG *prev_state )
 {
     unsigned int ret;
 
@@ -1265,21 +1319,47 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
     return ret;
 }
 
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtResetEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtResetEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtResetEvent );
+
+#endif
+
 
 /******************************************************************************
  *              NtClearEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtClearEvent( HANDLE handle )
+NTSTATUS WINAPI GPT_IMPORT(NtClearEvent)( HANDLE handle )
 {
     /* FIXME: same as NtResetEvent ??? */
     return NtResetEvent( handle, NULL );
 }
 
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtClearEvent( HANDLE handle )
+{
+    return sysv_NtClearEvent( handle );
+}
+
+GPT_ABI_WRAPPER( NtClearEvent );
+
+#endif
+
 
 /******************************************************************************
  *              NtPulseEvent (NTDLL.@)
  */
-NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
+NTSTATUS WINAPI GPT_IMPORT(NtPulseEvent)( HANDLE handle, LONG *prev_state )
 {
     unsigned int ret;
 
@@ -1298,6 +1378,19 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
     SERVER_END_REQ;
     return ret;
 }
+
+/* CW HACK 23015: D3DMetal's libd3dshared.dylib calls this with the ms_abi
+ * calling convention; GPT_ABI_WRAPPER dispatches on the caller's address. */
+#if defined(__APPLE__) && defined(__x86_64__)
+
+NTSTATUS __attribute__((ms_abi)) msthunk_NtPulseEvent( HANDLE handle, LONG *prev_state )
+{
+    return sysv_NtPulseEvent( handle, prev_state );
+}
+
+GPT_ABI_WRAPPER( NtPulseEvent );
+
+#endif
 
 
 /******************************************************************************

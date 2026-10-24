@@ -652,6 +652,52 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
                                0, NULL, size, ViewShare, 0, protect );
 }
 
+/* CW HACK 23015: D3DMetal (Apple Game Porting Toolkit) support.
+ *
+ * libd3dshared.dylib calls a few Nt* functions of ntdll.so with the ms_abi
+ * calling convention. For those, the exported symbol is a small wrapper that
+ * jumps to an ms_abi thunk when the caller's return address lies inside
+ * libd3dshared's __TEXT segment, and to the normal sysv implementation
+ * otherwise. Based on CodeWeavers' CrossOver Wine (LGPL 2.1+).
+ */
+#if defined(__APPLE__) && defined(__x86_64__)
+#include "wine/asm.h"
+
+extern void *libd3dshared_load_addr, *libd3dshared_code_end;
+
+#define GPT_IMPORT(name) sysv_##name
+#define GPT_ABI_WRAPPER(name) \
+    asm(".text\n\t" \
+        ".align 4\n\t" \
+        ".globl " __ASM_NAME(#name) "\n\t" \
+        __ASM_NAME(#name) ":\n\t" \
+        /* Using rax for scratch to fetch externs, rcx for return address. */ \
+        "push %rax\n\t" \
+        "push %rcx\n\t" \
+        "movq " __ASM_NAME("libd3dshared_load_addr") "@GOTPCREL(%rip), %rax\n\t" \
+        /* Always use the sysv version if we didn't load libd3dshared. */ \
+        "cmpq $0, (%rax)\n\t" \
+        "je " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        /* Is the return address (rsp+16) inside libd3dshared? */ \
+        "movq 16(%rsp), %rcx\n\t" \
+        "cmpq (%rax), %rcx\n\t" \
+        "jb " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        "movq " __ASM_NAME("libd3dshared_code_end") "@GOTPCREL(%rip), %rax\n\t" \
+        "cmpq (%rax), %rcx\n\t" \
+        "ja " __ASM_LOCAL_LABEL("jmp_sysv_" #name) "\n\t" \
+        /* Yes; use the ms_abi thunk. */ \
+        "pop %rcx\n\t" \
+        "pop %rax\n\t" \
+        "jmp " __ASM_NAME("msthunk_" #name) "\n\t" \
+        /* No; use sysv. */ \
+        __ASM_LOCAL_LABEL("jmp_sysv_" #name) ":\n\t" \
+        "pop %rcx\n\t" \
+        "pop %rax\n\t" \
+        "jmp " __ASM_NAME("sysv_" #name) "\n\t" )
+#else
+#define GPT_IMPORT(name) name
+#endif
+
 /* LDT definitions */
 
 #if defined(__i386__) || defined(__x86_64__)

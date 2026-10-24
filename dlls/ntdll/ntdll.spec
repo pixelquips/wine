@@ -1768,6 +1768,8 @@
 
 # Unix interface
 @ stdcall __wine_unix_spawnvp(long ptr)
+# CW HACK 22435: needed by D3DMetal PE DLLs
+@ stdcall __wine_unix_call(int64 long ptr) __wine_unix_call_exported
 @ stdcall __wine_ctrl_routine(ptr)
 @ extern -private __wine_syscall_dispatcher
 @ extern -private __wine_unix_call_dispatcher
