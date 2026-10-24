@@ -2224,11 +2224,14 @@ void init_win_context(void)
 
 
 /***********************************************************************
- *              DXMT interface
+ *              macdrv_functions interface (D3DMetal, DXMT, mtld3d)
  *
- * DXMT (https://github.com/3Shain/dxmt) and mtld3d (https://github.com/athei/mtld3d)
- * attach a Metal view to a window's client view through a function table exported
- * as "macdrv_functions", using the window data layout that CrossOver provides.
+ * Apple's D3DMetal (Game Porting Toolkit), DXMT (https://github.com/3Shain/dxmt)
+ * and mtld3d (https://github.com/athei/mtld3d) attach a Metal view to a window's
+ * client view through a function table exported as "macdrv_functions", using the
+ * window data layout that CrossOver provides. D3DMetal also uses the registry and
+ * user32 entries after on_main_thread. The layout of the table and of the window
+ * data follows CodeWeavers' CrossOver Wine (CW HACK 22435, LGPL 2.1+).
  */
 struct dxmt_win_data
 {
@@ -2236,14 +2239,32 @@ struct dxmt_win_data
     WineWindow             *cocoa_window;
     WineContentView        *cocoa_view;         /* unused by the consumers, left NULL as on CrossOver */
     WineContentView        *client_cocoa_view;
-    struct macdrv_win_data *data;               /* not part of the DXMT layout */
+    RECT                    window_rect;        /* USER window rectangle relative to parent */
+    RECT                    whole_rect;         /* Mac window rectangle for the whole window relative to parent */
+    RECT                    client_rect;        /* client area relative to parent */
+    int                     pixel_format;       /* pixel format for GL */
+    COLORREF                color_key;          /* not tracked by this driver any more; CLR_INVALID */
+    HANDLE                  drag_event;         /* event to signal that Cocoa-driven window dragging has ended */
+    unsigned int            on_screen : 1;      /* is window ordered in? (minimized or not) */
+    unsigned int            shaped : 1;         /* is window using a custom region shape? */
+    unsigned int            layered : 1;        /* is window layered and with valid attributes? */
+    unsigned int            ulw_layered : 1;    /* has UpdateLayeredWindow() been called for window? */
+    unsigned int            per_pixel_alpha : 1;/* is window using per-pixel alpha? */
+    unsigned int            minimized : 1;      /* is window minimized? */
+    struct macdrv_win_data *data;               /* CrossOver: padding[0], formerly the window surface */
+    void                   *padding;            /* CrossOver: padding[1], formerly the unminimized surface */
 };
 
-/* The consumers declare the first four fields and read them at these offsets. */
+/* The consumers read these fields at these offsets (CrossOver's layout). */
 C_ASSERT(offsetof(struct dxmt_win_data, hwnd) == 0);
 C_ASSERT(offsetof(struct dxmt_win_data, cocoa_window) == 1 * sizeof(void *));
 C_ASSERT(offsetof(struct dxmt_win_data, cocoa_view) == 2 * sizeof(void *));
 C_ASSERT(offsetof(struct dxmt_win_data, client_cocoa_view) == 3 * sizeof(void *));
+#ifdef _WIN64
+C_ASSERT(offsetof(struct dxmt_win_data, window_rect) == 32);
+C_ASSERT(offsetof(struct dxmt_win_data, drag_event) == 88);
+C_ASSERT(sizeof(struct dxmt_win_data) == 120);
+#endif
 
 static void cf_client_surface_release(CFAllocatorRef allocator, const void *client_surface)
 {
@@ -2293,6 +2314,18 @@ static struct dxmt_win_data *dxmt_get_win_data(HWND hwnd)
     ret->hwnd = data->hwnd;
     ret->cocoa_window = data->cocoa_window;
     ret->client_cocoa_view = surface->cocoa_view;
+    ret->window_rect = data->rects.window;
+    ret->whole_rect = data->rects.visible;
+    ret->client_rect = data->rects.client;
+    ret->pixel_format = data->pixel_format;
+    ret->color_key = CLR_INVALID;
+    ret->drag_event = data->drag_event;
+    ret->on_screen = data->on_screen;
+    ret->shaped = data->shaped;
+    ret->layered = data->layered;
+    ret->ulw_layered = data->ulw_layered;
+    ret->per_pixel_alpha = data->per_pixel_alpha;
+    ret->minimized = data->minimized;
     ret->data = data;
     return ret;
 }
@@ -2365,6 +2398,196 @@ void macdrv_client_surface_presented(const macdrv_event *event)
     client_surface_release(client);
 }
 
+/* The entries after on_main_thread are used by D3DMetal only. Like the rest of
+ * this unix library they use the host (sysv) calling convention, as on CrossOver.
+ * The registry entries run the advapi32 functions on the PE side through
+ * KeUserDispatchCallback. */
+typedef LONG LSTATUS;
+
+static LSTATUS d3dmetal_RegQueryValueExA(HKEY hkey, LPCSTR name, LPDWORD reserved, LPDWORD type,
+                                         BYTE *data, LPDWORD count)
+{
+    LSTATUS result = ERROR_GEN_FAILURE;
+    void *ret_ptr;
+    ULONG ret_len;
+    struct regqueryvalueexa_params params =
+    {
+        .dispatch = {.callback = regqueryvalueexa_callback},
+        .hkey = HandleToUlong(hkey),
+        .name = (UINT_PTR)name,
+        .reserved = (UINT_PTR)reserved,
+        .type = (UINT_PTR)type,
+        .data = (UINT_PTR)data,
+        .count = (UINT_PTR)count,
+        .result = (UINT_PTR)&result,
+    };
+
+    TRACE("%p %s %p %p %p %p\n", hkey, debugstr_a(name), reserved, type, data, count);
+
+    KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr, &ret_len);
+    return result;
+}
+
+static LSTATUS d3dmetal_RegSetValueExA(HKEY hkey, LPCSTR name, DWORD reserved, DWORD type,
+                                       const BYTE *data, DWORD count)
+{
+    LSTATUS result = ERROR_GEN_FAILURE;
+    void *ret_ptr;
+    ULONG ret_len;
+    struct regsetvalueexa_params params =
+    {
+        .dispatch = {.callback = regsetvalueexa_callback},
+        .hkey = HandleToUlong(hkey),
+        .name = (UINT_PTR)name,
+        .reserved = reserved,
+        .type = type,
+        .data = (UINT_PTR)data,
+        .count = count,
+        .result = (UINT_PTR)&result,
+    };
+
+    TRACE("%p %s %u %p %u\n", hkey, debugstr_a(name), (unsigned int)type, data, (unsigned int)count);
+
+    KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr, &ret_len);
+    return result;
+}
+
+static LSTATUS d3dmetal_RegOpenKeyExA(HKEY hkey, LPCSTR name, DWORD options, DWORD access, HKEY *retkey)
+{
+    LSTATUS result = ERROR_GEN_FAILURE;
+    void *ret_ptr;
+    ULONG ret_len;
+    struct regcreateopenkeyexa_params params =
+    {
+        .dispatch = {.callback = regcreateopenkeyexa_callback},
+        .create = 0,
+        .hkey = HandleToUlong(hkey),
+        .name = (UINT_PTR)name,
+        .options = options,
+        .access = access,
+        .retkey = (UINT_PTR)retkey,
+        .result = (UINT_PTR)&result,
+    };
+
+    TRACE("%p %s\n", hkey, debugstr_a(name));
+
+    KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr, &ret_len);
+    return result;
+}
+
+static LSTATUS d3dmetal_RegCreateKeyExA(HKEY hkey, LPCSTR name, DWORD reserved, LPSTR class, DWORD options,
+                                        DWORD access, SECURITY_ATTRIBUTES *security, HKEY *retkey,
+                                        LPDWORD disposition)
+{
+    LSTATUS result = ERROR_GEN_FAILURE;
+    void *ret_ptr;
+    ULONG ret_len;
+    struct regcreateopenkeyexa_params params =
+    {
+        .dispatch = {.callback = regcreateopenkeyexa_callback},
+        .create = 1,
+        .hkey = HandleToUlong(hkey),
+        .name = (UINT_PTR)name,
+        .reserved = reserved,
+        .class = (UINT_PTR)class,
+        .options = options,
+        .access = access,
+        .security = (UINT_PTR)security,
+        .retkey = (UINT_PTR)retkey,
+        .disposition = (UINT_PTR)disposition,
+        .result = (UINT_PTR)&result,
+    };
+
+    TRACE("%p %s\n", hkey, debugstr_a(name));
+
+    KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr, &ret_len);
+    return result;
+}
+
+static LSTATUS d3dmetal_RegCloseKey(HKEY hkey)
+{
+    TRACE("%p\n", hkey);
+
+    if (!hkey) return ERROR_INVALID_HANDLE;
+    if (hkey >= (HKEY)0x80000000) return ERROR_SUCCESS;  /* predefined key */
+    return RtlNtStatusToDosError(NtClose(hkey));
+}
+
+static BOOL d3dmetal_EnumDisplayMonitors(HDC hdc, LPRECT rect, MONITORENUMPROC proc, LPARAM lparam)
+{
+    TRACE("%p %p %p %ld\n", hdc, rect, proc, (long)lparam);
+    return NtUserEnumDisplayMonitors(hdc, rect, proc, lparam);
+}
+
+static BOOL d3dmetal_GetMonitorInfoA(HMONITOR monitor, LPMONITORINFO info)
+{
+    MONITORINFOEXW miW;
+    BOOL ret;
+
+    TRACE("%p %p\n", monitor, info);
+
+    if (info->cbSize == sizeof(MONITORINFO)) return NtUserGetMonitorInfo(monitor, info);
+    if (info->cbSize != sizeof(MONITORINFOEXA)) return FALSE;
+
+    miW.cbSize = sizeof(miW);
+    ret = NtUserGetMonitorInfo(monitor, (MONITORINFO *)&miW);
+    if (ret)
+    {
+        MONITORINFOEXA *miA = (MONITORINFOEXA *)info;
+        ULONG size;
+        miA->rcMonitor = miW.rcMonitor;
+        miA->rcWork = miW.rcWork;
+        miA->dwFlags = miW.dwFlags;
+        RtlUnicodeToUTF8N(miA->szDevice, sizeof(miA->szDevice), &size, miW.szDevice,
+                          (wcslen(miW.szDevice) + 1) * sizeof(WCHAR));
+    }
+    return ret;
+}
+
+static BOOL d3dmetal_AdjustWindowRectEx(LPRECT rect, DWORD style, BOOL menu, DWORD ex_style)
+{
+    TRACE("%p %#x %d %#x\n", rect, (unsigned int)style, menu, (unsigned int)ex_style);
+    return NtUserAdjustWindowRect(rect, style, menu, ex_style, NtUserGetSystemDpiForProcess(NULL));
+}
+
+static LONG_PTR d3dmetal_GetWindowLongPtrW(HWND hwnd, int offset)
+{
+    TRACE("%p %d\n", hwnd, offset);
+    /* ignore possibility of DWLP_DLGPROC */
+    return NtUserGetWindowLongPtrW(hwnd, offset);
+}
+
+static BOOL d3dmetal_GetWindowRect(HWND hwnd, LPRECT rect)
+{
+    TRACE("%p %p\n", hwnd, rect);
+    return NtUserGetWindowRect(hwnd, rect, NtUserGetWinMonitorDpi(hwnd, MDT_DEFAULT));
+}
+
+static BOOL d3dmetal_MoveWindow(HWND hwnd, int x, int y, int cx, int cy, BOOL repaint)
+{
+    TRACE("%p %d %d %d %d %d\n", hwnd, x, y, cx, cy, repaint);
+    return NtUserMoveWindow(hwnd, x, y, cx, cy, repaint);
+}
+
+static BOOL d3dmetal_SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int cy, UINT flags)
+{
+    TRACE("%p %p %d %d %d %d %#x\n", hwnd, after, x, y, cx, cy, flags);
+    return NtUserSetWindowPos(hwnd, after, x, y, cx, cy, flags);
+}
+
+static INT d3dmetal_GetSystemMetrics(INT index)
+{
+    TRACE("%d\n", index);
+    return NtUserGetSystemMetrics(index);
+}
+
+static LONG_PTR d3dmetal_SetWindowLongPtrW(HWND hwnd, INT offset, LONG_PTR newval)
+{
+    TRACE("%p %d %ld\n", hwnd, offset, (long)newval);
+    /* ignore possibility of DWLP_DLGPROC */
+    return NtUserSetWindowLongPtr(hwnd, offset, newval, FALSE);
+}
+
 struct macdrv_functions_table
 {
     void                   (*init_display_devices)(BOOL);
@@ -2377,14 +2600,31 @@ struct macdrv_functions_table
     CAMetalLayer          *(*view_get_metal_layer)(WineMetalView *);
     void                   (*view_release_metal_view)(WineMetalView *);
     void                   (*on_main_thread)(void *);
+    /* D3DMetal only */
+    LSTATUS                (*RegQueryValueExA)(HKEY, LPCSTR, LPDWORD, LPDWORD, BYTE *, LPDWORD);
+    LSTATUS                (*RegSetValueExA)(HKEY, LPCSTR, DWORD, DWORD, const BYTE *, DWORD);
+    LSTATUS                (*RegOpenKeyExA)(HKEY, LPCSTR, DWORD, DWORD, HKEY *);
+    LSTATUS                (*RegCreateKeyExA)(HKEY, LPCSTR, DWORD, LPSTR, DWORD, DWORD, SECURITY_ATTRIBUTES *,
+                                              HKEY *, LPDWORD);
+    LSTATUS                (*RegCloseKey)(HKEY);
+    BOOL                   (*EnumDisplayMonitors)(HDC, LPRECT, MONITORENUMPROC, LPARAM);
+    BOOL                   (*GetMonitorInfoA)(HMONITOR, LPMONITORINFO);
+    BOOL                   (*AdjustWindowRectEx)(LPRECT, DWORD, BOOL, DWORD);
+    LONG_PTR               (*GetWindowLongPtrW)(HWND, int);
+    BOOL                   (*GetWindowRect)(HWND, LPRECT);
+    BOOL                   (*MoveWindow)(HWND, int, int, int, int, BOOL);
+    BOOL                   (*SetWindowPos)(HWND, HWND, int, int, int, int, UINT);
+    INT                    (*GetSystemMetrics)(INT);
+    LONG_PTR               (*SetWindowLongPtrW)(HWND, INT, LONG_PTR);
 };
 
-/* The consumers declare these ten entries in this order and read nothing past
- * them. CrossOver's table has more entries after on_main_thread, which only
- * D3DMetal uses. */
+/* DXMT and mtld3d declare the first ten entries in this order and read nothing
+ * past them; D3DMetal uses all 24, as laid out by CrossOver (192 bytes). */
 C_ASSERT(offsetof(struct macdrv_functions_table, get_win_data) == 1 * sizeof(void *));
 C_ASSERT(offsetof(struct macdrv_functions_table, on_main_thread) == 9 * sizeof(void *));
-C_ASSERT(sizeof(struct macdrv_functions_table) == 10 * sizeof(void *));
+C_ASSERT(offsetof(struct macdrv_functions_table, RegQueryValueExA) == 10 * sizeof(void *));
+C_ASSERT(offsetof(struct macdrv_functions_table, SetWindowLongPtrW) == 23 * sizeof(void *));
+C_ASSERT(sizeof(struct macdrv_functions_table) == 24 * sizeof(void *));
 
 __attribute__((visibility("default"))) const struct macdrv_functions_table macdrv_functions =
 {
@@ -2398,4 +2638,18 @@ __attribute__((visibility("default"))) const struct macdrv_functions_table macdr
     macdrv_view_get_metal_layer,
     macdrv_view_release_metal_view,
     macdrv_run_on_main_thread,
+    d3dmetal_RegQueryValueExA,
+    d3dmetal_RegSetValueExA,
+    d3dmetal_RegOpenKeyExA,
+    d3dmetal_RegCreateKeyExA,
+    d3dmetal_RegCloseKey,
+    d3dmetal_EnumDisplayMonitors,
+    d3dmetal_GetMonitorInfoA,
+    d3dmetal_AdjustWindowRectEx,
+    d3dmetal_GetWindowLongPtrW,
+    d3dmetal_GetWindowRect,
+    d3dmetal_MoveWindow,
+    d3dmetal_SetWindowPos,
+    d3dmetal_GetSystemMetrics,
+    d3dmetal_SetWindowLongPtrW,
 };

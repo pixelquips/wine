@@ -25,6 +25,7 @@
 #include "ntgdi.h"
 #include "macdrv_res.h"
 #include "shellapi.h"
+#include "winreg.h"
 #include "unixlib.h"
 #include "wine/debug.h"
 
@@ -369,6 +370,56 @@ cleanup:
 }
 
 
+/* CW HACK 22435: registry access for D3DMetal through macdrv_functions */
+static NTSTATUS WINAPI macdrv_regcreateopenkeyexa(void *arg, ULONG size)
+{
+    struct regcreateopenkeyexa_params *params = arg;
+    LONG result;
+
+    TRACE("create %u hkey %#x name %s\n", params->create, params->hkey, debugstr_a(param_ptr(params->name)));
+
+    if (params->create)
+        result = RegCreateKeyExA(UlongToHandle(params->hkey), param_ptr(params->name), params->reserved,
+                                 param_ptr(params->class), params->options, params->access,
+                                 param_ptr(params->security), param_ptr(params->retkey),
+                                 param_ptr(params->disposition));
+    else
+        result = RegOpenKeyExA(UlongToHandle(params->hkey), param_ptr(params->name), params->options,
+                               params->access, param_ptr(params->retkey));
+
+    *(LONG *)param_ptr(params->result) = result;
+    return 0;
+}
+
+static NTSTATUS WINAPI macdrv_regqueryvalueexa(void *arg, ULONG size)
+{
+    struct regqueryvalueexa_params *params = arg;
+    LONG result;
+
+    TRACE("hkey %#x name %s\n", params->hkey, debugstr_a(param_ptr(params->name)));
+
+    result = RegQueryValueExA(UlongToHandle(params->hkey), param_ptr(params->name), param_ptr(params->reserved),
+                              param_ptr(params->type), param_ptr(params->data), param_ptr(params->count));
+
+    *(LONG *)param_ptr(params->result) = result;
+    return 0;
+}
+
+static NTSTATUS WINAPI macdrv_regsetvalueexa(void *arg, ULONG size)
+{
+    struct regsetvalueexa_params *params = arg;
+    LONG result;
+
+    TRACE("hkey %#x name %s\n", params->hkey, debugstr_a(param_ptr(params->name)));
+
+    result = RegSetValueExA(UlongToHandle(params->hkey), param_ptr(params->name), params->reserved,
+                            params->type, param_ptr(params->data), params->count);
+
+    *(LONG *)param_ptr(params->result) = result;
+    return 0;
+}
+
+
 static BOOL process_attach(void)
 {
     struct init_params params;
@@ -399,6 +450,9 @@ static BOOL process_attach(void)
     params.strings = strings;
     params.app_icon_callback = (UINT_PTR)macdrv_app_icon;
     params.app_quit_request_callback = (UINT_PTR)macdrv_app_quit_request;
+    params.regcreateopenkeyexa_callback = (UINT_PTR)macdrv_regcreateopenkeyexa;
+    params.regqueryvalueexa_callback = (UINT_PTR)macdrv_regqueryvalueexa;
+    params.regsetvalueexa_callback = (UINT_PTR)macdrv_regsetvalueexa;
 
     if (MACDRV_CALL(init, &params)) return FALSE;
 
