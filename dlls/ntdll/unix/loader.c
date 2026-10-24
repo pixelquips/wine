@@ -2156,6 +2156,46 @@ static void load_compatdb(void)
     free( name );
 }
 
+#if defined(__APPLE__) && defined(__x86_64__)
+/* GSBASE stays at the pthread TSD area on macOS, and the TSD slot at the TEB's
+ * Peb offset (%gs:0x60), which init_syscall_frame() sets to the PEB, is libc's
+ * localtime() buffer key: localtime() would write its struct tm over the PEB.
+ * Make localtime() use a buffer of its own (CrossOver). */
+static __thread struct tm localtime_tls;
+
+static struct tm *wine_localtime( const time_t *timep )
+{
+    return localtime_r( timep, &localtime_tls );
+}
+
+static void hook_function( void *to_hook, const void *replace )
+{
+    struct hooked_function
+    {
+        unsigned char jmp[8];
+        const void   *dst;
+    } *hooked_function = to_hook;
+    ULONG_PTR page = (ULONG_PTR)to_hook & ~(ULONG_PTR)0xfff;
+
+    if (mprotect( (void *)page, 0x2000, PROT_EXEC | PROT_READ | PROT_WRITE ))
+    {
+        ERR( "cannot hook %p: %s\n", to_hook, strerror(errno) );
+        return;
+    }
+    /* jmp *dst(%rip): the offset is from the end of the 6-byte jmp to dst */
+    hooked_function->jmp[0] = 0xff;
+    hooked_function->jmp[1] = 0x25;
+    hooked_function->jmp[2] = offsetof(struct hooked_function, dst) - 6;
+    hooked_function->jmp[3] = 0x00;
+    hooked_function->jmp[4] = 0x00;
+    hooked_function->jmp[5] = 0x00;
+    hooked_function->jmp[6] = 0xcc;
+    hooked_function->jmp[7] = 0xcc;
+    hooked_function->dst = replace;
+    mprotect( (void *)page, 0x2000, PROT_EXEC | PROT_READ );
+}
+#endif
+
 /***********************************************************************
  *           start_main_thread
  */
@@ -2177,6 +2217,9 @@ static void start_main_thread(void)
     load_ntdll();
     load_wow64_ntdll( main_image_info.Machine );
     load_apiset_dll();
+#if defined(__APPLE__) && defined(__x86_64__)
+    hook_function( (void *)localtime, wine_localtime );
+#endif
     load_compatdb();
     /* compatdb.so may have forced large address awareness after
      * virtual_alloc_first_teb made the first decision. */

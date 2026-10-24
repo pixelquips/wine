@@ -99,6 +99,27 @@ static DWORD default_search_flags;  /* default flags set by LdrSetDefaultDllDire
 static WCHAR *default_load_path;    /* default dll search path */
 static HANDLE known_dlls_ntdir;  /* NT directory containing known dlls sections */
 
+#if defined(__x86_64__) && !defined(__arm64ec__)
+/* On macOS, GSBASE stays at the pthread TSD area, which mirrors the TEB fields
+ * that PE code reads through %gs (CrossOver's scheme, see unix/signal_x86_64.c).
+ * The Unix side records each thread's gsbase in Instrumentation[0]; it is NULL
+ * on other hosts. */
+static inline void set_gs_teb_field( TEB *teb, ULONG offset, void *value )
+{
+    if (teb->Instrumentation[0]) *(void **)((char *)teb->Instrumentation[0] + offset) = value;
+}
+
+extern void CDECL wine_get_host_version( const char **sysname, const char **release );
+
+static BOOL is_macos(void)
+{
+    const char *sysname;
+
+    wine_get_host_version( &sysname, NULL );
+    return !strcmp( sysname, "Darwin" );
+}
+#endif
+
 struct dll_dir_entry
 {
     struct list entry;
@@ -1393,6 +1414,9 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
             if (!new) return FALSE;
             if (old) memcpy( new, old, old_module_count * sizeof(*new) );
             teb->ThreadLocalStoragePointer = new;
+#if defined(__x86_64__) && !defined(__arm64ec__)
+            set_gs_teb_field( teb, FIELD_OFFSET(TEB, ThreadLocalStoragePointer), new );
+#endif
             TRACE( "thread %04lx tls block %p -> %p\n", HandleToULong(teb->ClientId.UniqueThread), old, new );
             /* FIXME: can't free old block here, should be freed at thread exit */
         }
@@ -1638,6 +1662,9 @@ static NTSTATUS alloc_thread_tls(void)
         TRACE( "slot %u: %u/%lu bytes at %p\n", i, size, dir->SizeOfZeroFill, pointers[i] );
     }
     NtCurrentTeb()->ThreadLocalStoragePointer = pointers;
+#if defined(__x86_64__) && !defined(__arm64ec__)
+    set_gs_teb_field( NtCurrentTeb(), FIELD_OFFSET(TEB, ThreadLocalStoragePointer), pointers );
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -4018,6 +4045,9 @@ void WINAPI LdrShutdownThread(void)
     if ((pointers = NtCurrentTeb()->ThreadLocalStoragePointer))
     {
         NtCurrentTeb()->ThreadLocalStoragePointer = NULL;
+#if defined(__x86_64__) && !defined(__arm64ec__)
+        set_gs_teb_field( NtCurrentTeb(), FIELD_OFFSET(TEB, ThreadLocalStoragePointer), NULL );
+#endif
         for (i = 0; i < tls_module_count; i++) RtlFreeHeap( GetProcessHeap(), 0, pointers[i] );
         RtlFreeHeap( GetProcessHeap(), 0, pointers );
     }
@@ -4025,6 +4055,9 @@ void WINAPI LdrShutdownThread(void)
     NtCurrentTeb()->FlsSlots = NULL;
     RtlFreeHeap( GetProcessHeap(), 0, NtCurrentTeb()->TlsExpansionSlots );
     NtCurrentTeb()->TlsExpansionSlots = NULL;
+#if defined(__x86_64__) && !defined(__arm64ec__)
+    set_gs_teb_field( NtCurrentTeb(), FIELD_OFFSET(TEB, TlsExpansionSlots), NULL );
+#endif
     RtlReleasePebLock();
 
     RtlLeaveCriticalSection( &loader_section );
@@ -4568,6 +4601,24 @@ void loader_init( CONTEXT *context, void **entry )
 
         wm = get_modref( NtCurrentTeb()->Peb->ImageBaseAddress );
     }
+
+#if defined(__x86_64__) && !defined(__arm64ec__)
+    if (NtCurrentTeb()->Instrumentation[0] && !NtCurrentTeb()->WowTebOffset && is_macos())
+    {
+        /* CW HACK 18756: code that inlines TlsGetValue() reads TlsSlots and
+         * TlsExpansionSlots through %gs, which is not the TEB on macOS. Use up the
+         * 64 TlsSlots, so that TlsAlloc() hands out expansion slots only, and
+         * preallocate TlsExpansionSlots (kernelbase would allocate it on demand,
+         * without updating the %gs-relative copy) and mirror the pointer. */
+        if (!NtCurrentTeb()->TlsExpansionSlots)
+            NtCurrentTeb()->TlsExpansionSlots = RtlAllocateHeap( GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    8 * sizeof(NtCurrentTeb()->Peb->TlsExpansionBitmapBits) * sizeof(void *) );
+        set_gs_teb_field( NtCurrentTeb(), FIELD_OFFSET(TEB, TlsExpansionSlots), NtCurrentTeb()->TlsExpansionSlots );
+
+        if (!attach_done) /* only the first time */
+            while (RtlFindClearBitsAndSet( NtCurrentTeb()->Peb->TlsBitmap, 1, 1 ) != ~0U);
+    }
+#endif
 
     NtCurrentTeb()->FlsSlots = fls_alloc_data();
 

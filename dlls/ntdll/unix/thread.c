@@ -1123,6 +1123,15 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
     close( data->wait_fd[1] );
     close( data->reply_fd );
     close( data->request_fd );
+
+#if defined(__APPLE__) && defined(__x86_64__)
+    /* The TSD slot at the Peb offset (%gs:0x60) is macOS' localtime key: clear
+     * it, or pthread_exit() may try to free() the PEB. (CrossOver) */
+    __asm__ volatile (".byte 0x65\n\tmovq %q0,%c1"
+                      :
+                      : "r" (NULL), "n" (FIELD_OFFSET(TEB, Peb)));
+#endif
+
     pthread_exit( UIntToPtr(status) );
 }
 
