@@ -365,10 +365,16 @@ int get_compat_large_address_aware(void)
 
 static void set_dll_path(void)
 {
-    char *p, *path = getenv( "WINEDLLPATH" );
+    /* Fexbox: PROTON_EAC_RUNTIME points at the Easy Anti-Cheat runtime dir. Its lib subdirs are
+     * prepended to the native builtin search path so the game's EAC DLL resolves to the native
+     * bridge library placed there, instead of the Windows DLL. Ported from Proton's wine
+     * (dlls/ntdll/unix/loader.c set_dll_path); on macOS the native builtins are .so, same as Linux. */
+    char *p, *path = getenv( "WINEDLLPATH" ), *eac_runtime = getenv( "PROTON_EAC_RUNTIME" );
     int i, count = 0;
 
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
+
+    if (eac_runtime) count += 2;
 
     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
     count = 0;
@@ -380,6 +386,20 @@ static void set_dll_path(void)
         path = strdup(path);
         for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
         free( path );
+    }
+
+    if (eac_runtime)
+    {
+        static const char lib32[] = "/v2/lib32/";
+        static const char lib64[] = "/v2/lib64/";
+
+        p = malloc( strlen(eac_runtime) + sizeof(lib32) );
+        strcpy( p, eac_runtime ); strcat( p, lib32 );
+        dll_paths[count++] = p;
+
+        p = malloc( strlen(eac_runtime) + sizeof(lib64) );
+        strcpy( p, eac_runtime ); strcat( p, lib64 );
+        dll_paths[count++] = p;
     }
 
     for (i = 0; i < count; i++) dll_path_maxlen = max( dll_path_maxlen, strlen(dll_paths[i]) );
