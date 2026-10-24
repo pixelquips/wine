@@ -663,6 +663,9 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
 #if defined(__APPLE__) && defined(__x86_64__)
 #include "wine/asm.h"
 
+#ifdef __APPLE__
+extern void set_mac_thread_qos( pthread_attr_t *attr );
+#endif
 extern void *libd3dshared_load_addr, *libd3dshared_code_end;
 
 #define GPT_IMPORT(name) sysv_##name

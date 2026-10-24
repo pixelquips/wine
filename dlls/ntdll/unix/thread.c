@@ -1313,6 +1313,29 @@ static NTSTATUS create_server_thread( HANDLE *handle, struct thread_data **data_
 }
 
 
+#ifdef __APPLE__
+#include <pthread/qos.h>
+/* WINE_MAC_THREAD_QOS=interactive|initiated|default|utility sets the QoS class Windows
+ * threads start with. macOS places Default-QoS work on efficiency cores, which starves
+ * game job threads. */
+void set_mac_thread_qos( pthread_attr_t *attr )
+{
+    static int qos = -1;
+    if (qos == -1)
+    {
+        const char *env = getenv( "WINE_MAC_THREAD_QOS" );
+        qos = 0;
+        if (env && !strcmp( env, "interactive" )) qos = QOS_CLASS_USER_INTERACTIVE;
+        else if (env && !strcmp( env, "initiated" )) qos = QOS_CLASS_USER_INITIATED;
+        else if (env && !strcmp( env, "default" )) qos = QOS_CLASS_DEFAULT;
+        else if (env && !strcmp( env, "utility" )) qos = QOS_CLASS_UTILITY;
+    }
+    if (!qos) return;
+    if (attr) pthread_attr_set_qos_class_np( attr, qos, 0 );
+    else pthread_set_qos_class_self_np( qos, 0 );
+}
+#endif
+
 /***********************************************************************
  *           spawn_thread
  */
@@ -1328,6 +1351,9 @@ static NTSTATUS spawn_thread( struct thread_data *data )
     pthread_attr_setstack( &attr, get_kernel_stack( data ), kernel_stack_size );
     pthread_attr_setguardsize( &attr, 0 );
     pthread_attr_setscope( &attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
+#ifdef __APPLE__
+    set_mac_thread_qos( &attr );
+#endif
     InterlockedIncrement( &nb_threads );
     if (pthread_create( &pthread_id, &attr, (void * (*)(void *))server_init_thread, data ))
     {
