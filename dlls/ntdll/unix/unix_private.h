@@ -251,6 +251,9 @@ extern BOOL is_system_dir_path( const UNICODE_STRING *path, WORD *machine );
 extern NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine );
 extern NTSTATUS load_start_exe( UNICODE_STRING *nt_name );
 extern ULONG_PTR redirect_arm64ec_rva( void *module, ULONG_PTR rva, const IMAGE_ARM64EC_METADATA *metadata );
+#ifdef __APPLE__
+extern void set_mac_thread_qos( pthread_attr_t *attr );
+#endif
 extern void start_server( BOOL debug );
 
 extern unsigned int server_call_unlocked( void *req_ptr );
