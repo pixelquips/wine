@@ -35,6 +35,7 @@
 #include <d3d10.h>
 #include <d3d11.h>
 #include <d3d12.h>
+#include <d3dkmdt.h>  /* D3DKMT_WDDM_2_7_CAPS, CW HACK 24905 */
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3dkmt);
 
@@ -616,6 +617,24 @@ NTSTATUS WINAPI NtGdiDdDDIQueryAdapterInfo( D3DKMT_QUERYADAPTERINFO *desc )
 
         *value = KMT_DRIVERVERSION_WDDM_3_1;
         return STATUS_SUCCESS;
+    }
+    /* CW HACK 24905: D3DMetal expects hardware GPU scheduling to be reported */
+    case KMTQAITYPE_WDDM_2_7_CAPS:
+    {
+        D3DKMT_WDDM_2_7_CAPS *caps = desc->pPrivateDriverData;
+        const char *active_gfx_backend = getenv( "CX_ACTIVE_GRAPHICS_BACKEND" );
+
+        if (desc->PrivateDriverDataSize < sizeof(*caps))
+            return STATUS_INVALID_PARAMETER;
+
+        if (active_gfx_backend && !strcmp( active_gfx_backend, "d3dmetal" ))
+        {
+            caps->HwSchEnabled = 1;
+            caps->HwSchSupported = 1;
+            caps->HwSchEnabledByDefault = 1;
+            return STATUS_SUCCESS;
+        }
+        /* fallthrough */
     }
     default:
     {
